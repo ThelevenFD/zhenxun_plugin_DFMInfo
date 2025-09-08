@@ -48,7 +48,7 @@ data = {}
 matcher = on_alconna(Alconna("re:(洲|粥)"), priority=1, block=True)
 
 
-def gen_list(event, content):
+async def gen_list(event, content):
     base_msg = {
         "type": "node",
         "data": {"name": "真寻", "uin": event.self_id, "content": content},
@@ -58,7 +58,7 @@ def gen_list(event, content):
     return msg_list
 
 
-def get_cookie():
+async def get_cookie():
     try:
         del headers["Cookie"]
     except:
@@ -69,8 +69,6 @@ def get_cookie():
     php_cookie = ck_response.headers["Set-Cookie"].split(";")[0]  # ["PHPSESSID"]
     ver_cookie = Menu_data["built_ver"]
 
-
-get_cookie()
 
 
 @matcher.handle()
@@ -89,11 +87,11 @@ async def get_data(bot: Bot, event: Event):
         for i in range(len(works)):
             items[item_info[works[i]]["itemName"]] = item_info[works[i]]["profit"]
         Itemname = list(items.keys())
-        gen_list(
+        await gen_list(
             event,
             f"零号大坝:{keys[0]}\n长弓溪谷:{keys[1]}\n巴克什:{keys[2]}\n航天基地:{keys[3]}\n潮汐监狱:{keys[4]}",
         )
-        gen_list(
+        await gen_list(
             event,
             f"特勤处制作产物推荐:\n技术中心:{Itemname[0]}\n当前利润:{int(items[Itemname[0]])}\n工作台:{Itemname[1]}\n当前利润:{int(items[Itemname[1]])}\n制药台:{Itemname[2]}\n当前利润:{int(items[Itemname[2]])}\n防具台:{Itemname[3]}\n当前利润:{int(items[Itemname[3]])}",
         )
@@ -108,7 +106,7 @@ async def get_data(bot: Bot, event: Event):
             logger.error("出错了", e=e)
             await MessageUtils.build_message(f"合并转发信息错误:{e}...请重试...").send()
     except Exception as e:
-        get_cookie()
+        await get_cookie()
         logger.error(f"出错了{traceback.format_exc()}", e=e)
         await MessageUtils.build_message("没有获取到数据...请重试...").send()
     finally:

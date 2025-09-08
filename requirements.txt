@@ -1,0 +1,6 @@
+httpx>=0.24.0
+nonebot-plugin-alconna>=0.45.0
+
+# 注意：此插件需要真寻机器人框架
+# nonebot2 和 nonebot-adapter-onebot11 是真寻的基础依赖
+# 请确保已安装真寻机器人框架
