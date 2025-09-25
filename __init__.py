@@ -13,10 +13,10 @@ from zhenxun.utils.message import MessageUtils
 
 __plugin_meta__ = PluginMetadata(
     name="三角洲小助手",
-    description=f"{BotConfig.self_nickname}帮你获取三角洲信息！(数据来源：https://www.kkrb.net/)",
+    description=f"{BotConfig.self_nickname}帮你获取三角洲信息！",
     usage="""
     指令：
-    粥/洲
+        粥
     """.strip(),
     extra=PluginExtraData(author="The_elevenFD", version="0.1").to_dict(),
 )
@@ -24,10 +24,7 @@ __plugin_meta__ = PluginMetadata(
 urls = ["https://www.kkrb.net/getMenu", "https://www.kkrb.net/getOVData"]
 maps = ["db", "cgxg", "bks", "htjd", "cxjy"]
 works = ["tech", "workbench", "pharmacy", "armory"]
-keys = []
-msg_list = []
 
-items = {}
 headers = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.3351.109",
     "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -44,11 +41,15 @@ headers = {
     "Accept-Language": "zh-CN,zh;q=0.9",
 }
 data = {}
+cookie_cache = {
+    "php_cookie": "",
+    "ver_cookie": "",
+}
 
 matcher = on_alconna(Alconna("re:(洲|粥)"), priority=1, block=True)
 
 
-async def gen_list(event, content):
+def gen_list(event, content, msg_list):
     base_msg = {
         "type": "node",
         "data": {"name": "真寻", "uin": event.self_id, "content": content},
@@ -61,21 +62,28 @@ async def gen_list(event, content):
 async def get_cookie():
     try:
         del headers["Cookie"]
-    except:
+    except Exception:
         pass
-    global php_cookie, ver_cookie
     ck_response = httpx.post(url=urls[0], data=data, headers=headers, timeout=1)
     Menu_data = loads(ck_response.text)
     php_cookie = ck_response.headers["Set-Cookie"].split(";")[0]  # ["PHPSESSID"]
     ver_cookie = Menu_data["built_ver"]
-
+    cookie_cache["php_cookie"] = php_cookie
+    cookie_cache["ver_cookie"] = ver_cookie
+    return php_cookie, ver_cookie
 
 
 @matcher.handle()
-async def get_data(bot: Bot, event: Event):
+async def get_data(bot: Bot, event: Event, retry: int = 0):
+    msg_list = []
+    keys = []
+    items = {}
+    if retry > 3:
+        await MessageUtils.build_message("获取数据失败...请重试...").send()
+        return
     try:
-        headers["Cookie"] = php_cookie
-        data["version"] = ver_cookie
+        headers["Cookie"] = cookie_cache["php_cookie"]
+        data["version"] = cookie_cache["ver_cookie"]
         data_response = httpx.post(
             url=urls[1], data=data, headers=headers, timeout=1
         ).text
@@ -87,13 +95,15 @@ async def get_data(bot: Bot, event: Event):
         for i in range(len(works)):
             items[item_info[works[i]]["itemName"]] = item_info[works[i]]["profit"]
         Itemname = list(items.keys())
-        await gen_list(
+        gen_list(
             event,
             f"零号大坝:{keys[0]}\n长弓溪谷:{keys[1]}\n巴克什:{keys[2]}\n航天基地:{keys[3]}\n潮汐监狱:{keys[4]}",
+            msg_list,
         )
-        await gen_list(
+        gen_list(
             event,
             f"特勤处制作产物推荐:\n技术中心:{Itemname[0]}\n当前利润:{int(items[Itemname[0]])}\n工作台:{Itemname[1]}\n当前利润:{int(items[Itemname[1]])}\n制药台:{Itemname[2]}\n当前利润:{int(items[Itemname[2]])}\n防具台:{Itemname[3]}\n当前利润:{int(items[Itemname[3]])}",
+            msg_list,
         )
         try:
             if event.group_id:
@@ -105,11 +115,6 @@ async def get_data(bot: Bot, event: Event):
         except Exception as e:
             logger.error("出错了", e=e)
             await MessageUtils.build_message(f"合并转发信息错误:{e}...请重试...").send()
-    except Exception as e:
-        await get_cookie()
-        logger.error(f"出错了{traceback.format_exc()}", e=e)
-        await MessageUtils.build_message("没有获取到数据...请重试...").send()
-    finally:
-        msg_list.clear()
-        keys.clear()
-        items.clear()
+    except Exception:
+        cookie_cache["php_cookie"], cookie_cache["ver_cookie"] = await get_cookie()
+        await get_data(bot, event, retry + 1)
