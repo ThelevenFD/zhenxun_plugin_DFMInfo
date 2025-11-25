@@ -1,277 +1,254 @@
 # -*- coding: utf-8 -*-
 """
-三角洲小助手插件
-功能：获取三角洲游戏的相关信息，包括地图密码、战备方案、制作产物推荐等
-作者：The_elevenFD
-版本：0.1
+三角洲小助手插件 - 重构版
 """
-
+import asyncio
 import traceback
-from json import loads
-from typing import Optional
+from typing import Dict, List, Optional, Any
 
-from httpx import AsyncClient
-from nonebot.adapters.onebot.v11 import Bot, Event
+from httpx import AsyncClient, HTTPError
+from nonebot import get_driver
+from nonebot.adapters.onebot.v11 import Bot, Event, Message
 from nonebot.plugin import PluginMetadata
 from nonebot_plugin_alconna import Alconna, on_alconna
-from nonebot import get_driver
 
+# 假设这些是项目内的固有依赖
 from zhenxun.configs.config import BotConfig
 from zhenxun.configs.utils import PluginExtraData
 from zhenxun.services.log import logger
 from zhenxun.utils.message import MessageUtils
 
-# 插件元数据定义
+# --- 常量定义 ---
+API_BASE = "https://www.kkrb.net"
+URLS = {
+    "MENU": f"{API_BASE}/getMenu",
+    "OVERVIEW": f"{API_BASE}/getOVData",
+    "HOME": f"{API_BASE}/?viewpage=view%2Foverview",
+    "CPV": f"{API_BASE}/getCPVData"
+}
+
+# 战备值映射 (等级 -> 目标金额)
+COST_MAPPING = {0: 112500, 1: 187500, 2: 550000, 3: 600000, 4: 780000}
+
+# 地图代号映射
+MAP_NAMES = {
+    "db": "零号大坝", "cgxg": "长弓溪谷", "bks": "巴克什",
+    "htjd": "航天基地", "cxjy": "潮汐监狱"
+}
+
+# 工作台类型映射
+WORKSHOP_NAMES = {
+    "tech": "技术中心", "workbench": "工作台",
+    "pharmacy": "制药台", "armory": "防具台"
+}
+
+# 请求头
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": URLS["HOME"],
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+# --- 插件元数据 ---
 __plugin_meta__ = PluginMetadata(
     name="三角洲小助手",
     description=f"{BotConfig.self_nickname}帮你获取三角洲信息！",
-    usage="""
-    指令：
-        粥
-    """.strip(),
-    extra=PluginExtraData(author="The_elevenFD", version="0.1").to_dict(),
+    usage="指令：洲 / 粥",
+    extra=PluginExtraData(author="The_elevenFD", version="0.2").to_dict(),
 )
 
-# 获取驱动实例
 driver = get_driver()
 
-# API接口URL列表
-api_urls = [
-    "https://www.kkrb.net/getMenu",        # 获取菜单数据
-    "https://www.kkrb.net/getOVData",       # 获取概览数据
-    "https://www.kkrb.net/?viewpage=view%2Foverview",  # 主页URL
-    "https://www.kkrb.net/getCPVData"      # 获取CPV数据
-]
+class DeltaService:
+    """处理三角洲数据的服务类"""
+    def __init__(self):
+        self.client: Optional[AsyncClient] = None
+        self.version_cookie: str = ""
+        # 共享 Session，复用连接
+        self.client = AsyncClient(headers=DEFAULT_HEADERS, timeout=10.0)
 
-# 地图名称映射
-map_codes = ["db", "cgxg", "bks", "htjd", "cxjy"]  # 对应：零号大坝、长弓溪谷、巴克什、航天基地、潮汐监狱
+    async def _ensure_cookies(self, force_refresh: bool = False):
+        """确保 Cookie 有效，必要时刷新"""
+        if not force_refresh and self.version_cookie and self.client.cookies.get("PHPSESSID"):
+            return
 
-# 工作台类型
-workshop_types = ["tech", "workbench", "pharmacy", "armory"]  # 对应：技术中心、工作台、制药台、防具台
-
-# 请求头信息
-session_cookies = {}
-request_headers = {
-    "sec-ch-ua-platform": "\"Windows\"",
-    "x-requested-with": "XMLHttpRequest",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
-    "accept": "*/*",
-    "sec-ch-ua": "\"Microsoft Edge\";v=\"143\", \"Chromium\";v=\"143\", \"Not A(Brand\";v=\"24\"",
-    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-    "sec-ch-ua-mobile": "?0",
-    "origin": "https://www.kkrb.net",
-    "sec-fetch-site": "same-origin",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-dest": "empty",
-    "referer": "https://www.kkrb.net/?viewpage=view%2Foverview",
-    "accept-encoding": "gzip, deflate, br, zstd",
-    "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    "priority": "u=1, i"
-}
-
-# 请求数据
-request_data = ""
-
-# Cookie缓存
-cookie_cache = {
-    "php_session_id": "",   # PHPSESSID
-    "version_cookie": "",   # 版本Cookie
-}
-
-# 创建指令匹配器，匹配"洲"或"粥"
-command_matcher = on_alconna(Alconna("re:(洲|粥)"), priority=1, block=True)
-
-
-async def generate_forward_message(event, content, insert: Optional[int] = None, message_list: list = []):
-    """
-    生成转发消息节点
-    
-    Args:
-        event: 事件对象
-        content: 消息内容
-        insert: 插入位置，None表示追加到末尾
-        message_list: 消息列表
-    
-    Returns:
-        list: 更新后的消息列表
-    """
-    base_message = {
-        "type": "node",
-        "data": {"name": "真寻", "uin": event.self_id, "content": content},
-        "summary": "咕咕嘎嘎!",
-        "prompt": "咕咕嘎嘎!",
-    }
-    if insert is not None:
-        message_list.insert(insert, base_message)
-    else:
-        message_list.append(base_message)
-    return message_list
-
-
-async def fetch_cookies():
-    """
-    获取网站Cookie
-    
-    Returns:
-        tuple: (php_session_id, version_cookie) Cookie字符串
-    """
-    try:
-        async with AsyncClient() as http_client:
-            # 访问主页获取PHPSESSID
-            home_response = await http_client.get(api_urls[2], headers=request_headers, cookies=session_cookies, timeout=3)
-            php_session_id = dict(home_response.cookies).get("PHPSESSID","")
-            cookie_cache["php_session_id"] = php_session_id
-            session_cookies["PHPSESSID"] = php_session_id 
+        logger.info("正在获取/刷新三角洲 Cookie...")
+        try:
+            # 1. 访问主页获取 PHPSESSID
+            await self.client.get(URLS["HOME"])
             
-            # 获取菜单数据，提取版本Cookie
-            menu_response = await http_client.post(api_urls[0], headers=request_headers, cookies=session_cookies, timeout=3)
-            menu_data = loads(menu_response.text)
-            version_cookie = menu_data["built_ver"]
-            cookie_cache["version_cookie"] = version_cookie
-            return php_session_id, version_cookie
-    except Exception:
-        logger.error(traceback.format_exc())
-        return "",""
-
-
-@command_matcher.handle()
-async def handle_delta_command(bot: Bot, event: Event, retry_count: int = 0):
-    """
-    处理"洲/粥"指令，获取三角洲信息
-    
-    Args:
-        bot: 机器人实例
-        event: 事件对象
-        retry_count: 重试次数，默认0
-    """
-    forward_messages = []  # 转发消息列表
-    map_passwords = []     # 地图密码列表
-    item_profits = {}      # 物品利润字典
-    
-    # 重试次数限制
-    if retry_count > 3:
-        await MessageUtils.build_message("获取数据失败...请重试...").send()
-        return
-    
-    try:
-        async with AsyncClient() as http_client:
-            # 构建请求数据
-            request_data = f"version={cookie_cache['version_cookie']}&globalData=false"
-            logger.error(f"query:{request_data}")
+            # 2. 获取版本号
+            resp = await self.client.post(URLS["MENU"])
+            data = resp.json()
+            self.version_cookie = data.get("built_ver", "")
             
-            # 获取概览数据
-            overview_response = await http_client.post(
-                url=api_urls[1], data=request_data, headers=request_headers, cookies=session_cookies, timeout=1
-            )
-            
-            # 获取CPV数据（战备方案数据）
-            cpv_response = await http_client.post(
-                url=api_urls[3], data=request_data, headers=request_headers, cookies=session_cookies, timeout=1
-            )
-            
-            logger.info("获取CPV信息!")
-            cpv_data_dict = loads(cpv_response.text)
-            cpv_info = cpv_data_dict["data"]  # CPV数据
-            
-            logger.info("获取三角洲信息!")
-            overview_data_dict = loads(overview_response.text)
-            special_forces_data = overview_data_dict["data"]["spData"]  # 特勤处数据
-            
-            # 卡战备方案处理
-            schemes_by_cost = {}  # 按战备值分类的方案字典
-            scheme_items_by_cost = {112500:"", 187500:"", 550000:"", 600000:"", 780000:""}  # 战备值对应的物品列表
-            await generate_forward_message(event, "凑战备方案:", 2, forward_messages,)
-            for cost_level in range(5):
-                # 战备值映射：0-112500, 1-187500, 2-550000, 3-600000, 4-780000
-                cost_mapping = {0:112500, 1:187500, 2:550000, 3:600000, 4:780000}
+            if not self.version_cookie:
+                raise ValueError("未获取到版本号")
                 
-                # 查找对应战备值的市场方案
-                for _, scheme in enumerate(cpv_info):
-                    if scheme["targetValue"] == cost_mapping[cost_level] and scheme["schemeType"] == "market": 
-                        schemes_by_cost[scheme["targetValue"]] = scheme
-                        break
-                
-                # 提取方案中的物品名称
-                for item_index in range(len(schemes_by_cost[cost_mapping[cost_level]]["schemeItems"])):
-                    scheme_items_by_cost[cost_mapping[cost_level]] += "\n" + schemes_by_cost[cost_mapping[cost_level]]["schemeItems"][item_index]["objectName"]
-                scheme_items_by_cost[cost_mapping[cost_level]] += "\n" + f"成本:{schemes_by_cost[cost_mapping[cost_level]]['totalHafCost']}"
-                # 构建战备方案消息
-                await generate_forward_message(
-                    event,
-                    f"{cost_mapping[cost_level]}:{scheme_items_by_cost[cost_mapping[cost_level]]}",
-                    None,
-                    forward_messages,
-                )
-                
-            
-            # 地图密码获取
-            for map_index in range(len(map_codes)):
-                map_passwords.append(overview_data_dict["data"]["bdData"][map_codes[map_index]]["password"])
-            
-            # 特勤处制作产物推荐
-            for workshop_index in range(len(workshop_types)):
-                item_profits[special_forces_data[workshop_types[workshop_index]]["itemName"]] = special_forces_data[workshop_types[workshop_index]]["profit"]
-            
-            item_names = list(item_profits.keys())
-            
-            # 添加地图密码消息
-            await generate_forward_message(
-                event,
-                f"""零号大坝:{map_passwords[0]}
-长弓溪谷:{map_passwords[1]}
-巴克什:{map_passwords[2]}
-航天基地:{map_passwords[3]}
-潮汐监狱:{map_passwords[4]}""",
-                0,
-                forward_messages,
-            )
-            
-            # 添加特勤处制作产物推荐消息
-            await generate_forward_message(
-                event,
-                f"""特勤处制作产物推荐:
-技术中心:{item_names[0]}
-当前利润:{int(item_profits[item_names[0]])}
-工作台:{item_names[1]}
-当前利润:{int(item_profits[item_names[1]])}
-制药台:{item_names[2]}
-当前利润:{int(item_profits[item_names[2]])}
-防具台:{item_names[3]}
-当前利润:{int(item_profits[item_names[3]])}""",
-                0,
-                forward_messages,
-            )
-            await generate_forward_message(
-                event,
-                "数据来源于:KK日报&官方\n若有侵权请联系删除",
-                None,
-                forward_messages,
-            )
+            logger.info(f"Cookie刷新成功: Ver={self.version_cookie}")
+        except Exception as e:
+            logger.error(f"获取Cookie失败: {e}")
+            raise
 
-            # 发送转发消息
-            try:
-                if event.group_id:
-                    # 群聊转发
-                    await bot.send_group_forward_msg(
-                        group_id=event.group_id, messages=forward_messages
-                    )
-            except AttributeError:
-                # 私聊转发
-                await bot.send_private_forward_msg(user_id=event.user_id, messages=forward_messages)
-            except Exception as error:
-                logger.error("出错了", e=traceback.format_exc())
-                await MessageUtils.build_message(f"合并转发信息错误:{error}...请重试...").send()
-    except Exception:
-        # 异常处理：重新获取Cookie并重试
-        logger.error("出错了", e=traceback.format_exc())
-        cookie_cache["php_session_id"], cookie_cache["version_cookie"] = await fetch_cookies()
-        await handle_delta_command(bot, event, retry_count + 1)
+    async def get_game_data(self) -> Dict[str, Any]:
+        """并发获取所有游戏数据"""
+        await self._ensure_cookies()
+        
+        form_data = {"version": self.version_cookie, "globalData": "false"}
+        
+        try:
+            # 并发请求 API，提高速度
+            ov_task = self.client.post(URLS["OVERVIEW"], data=form_data)
+            cpv_task = self.client.post(URLS["CPV"], data=form_data)
+            
+            ov_resp, cpv_resp = await asyncio.gather(ov_task, cpv_task)
+            
+            # 检查响应状态 (如果 Session 过期可能返回特定错误，这里简单处理)
+            if ov_resp.status_code != 200 or cpv_resp.status_code != 200:
+                raise HTTPError("API请求返回非200状态")
 
+            return {
+                "overview": ov_resp.json().get("data", {}),
+                "cpv": cpv_resp.json().get("data", [])
+            }
+        except Exception:
+            # 如果请求失败，尝试刷新 Cookie 后再试一次（简单的重试机制）
+            logger.warning("数据请求失败，尝试刷新Cookie重试...")
+            await self._ensure_cookies(force_refresh=True)
+            # 更新 form_data 的 version
+            form_data["version"] = self.version_cookie
+            
+            ov_resp = await self.client.post(URLS["OVERVIEW"], data=form_data)
+            cpv_resp = await self.client.post(URLS["CPV"], data=form_data)
+            
+            return {
+                "overview": ov_resp.json().get("data", {}),
+                "cpv": cpv_resp.json().get("data", [])
+            }
+
+    def process_schemes(self, cpv_data: List[Dict]) -> str:
+        """处理战备方案数据"""
+        # 预处理：将 market 类型的方案转为字典 {targetValue: scheme} 以便快速查找
+        market_schemes = {
+            s["targetValue"]: s 
+            for s in cpv_data 
+            if s.get("schemeType") == "market"
+        }
+        
+        lines = ["凑战备方案:"]
+        for level in range(5):
+            target_cost = COST_MAPPING.get(level)
+            scheme = market_schemes.get(target_cost)
+            
+            if scheme:
+                items = [item["objectName"] for item in scheme.get("schemeItems", [])]
+                item_str = "\n".join(items)
+                cost = scheme.get("totalHafCost", "未知")
+                lines.append(f"--- {target_cost} 档 ---\n{item_str}\n成本: {cost}")
+            else:
+                lines.append(f"--- {target_cost} 档 ---\n暂无方案")
+                
+        return "\n".join(lines)
+
+    def process_passwords(self, bd_data: Dict) -> str:
+        """处理地图密码"""
+        lines = []
+        for code, name in MAP_NAMES.items():
+            pwd = bd_data.get(code, {}).get("password", "未知")
+            lines.append(f"{name}: {pwd}")
+        return "\n".join(lines)
+
+    def process_profits(self, sp_data: Dict) -> str:
+        """处理特勤处利润"""
+        lines = ["特勤处制作产物推荐:"]
+        for code, name in WORKSHOP_NAMES.items():
+            info = sp_data.get(code, {})
+            item_name = info.get("itemName", "未知")
+            profit = int(info.get("profit", 0))
+            lines.append(f"{name}: {item_name}\n当前利润: {profit}")
+        return "\n".join(lines)
+
+    async def close(self):
+        if self.client:
+            await self.client.aclose()
+
+# 实例化服务
+delta_service = DeltaService()
 
 @driver.on_startup
-async def initialize_plugin():
-    """
-    插件启动时初始化Cookie
-    """
-    await fetch_cookies()
-    logger.info(f"初始化cookie:{cookie_cache}")
+async def _():
+    # 预加载 Cookie
+    try:
+        await delta_service._ensure_cookies()
+    except Exception:
+        pass
+
+@driver.on_shutdown
+async def _():
+    await delta_service.close()
+
+
+# 指令处理器
+command_matcher = on_alconna(Alconna("re:(洲|粥)"), priority=1, block=True)
+
+@command_matcher.handle()
+async def handle_delta_command(bot: Bot, event: Event):
+    try:
+        # 1. 获取数据
+        data = await delta_service.get_game_data()
+        
+        overview = data["overview"]
+        cpv_data = data["cpv"]
+        
+        # 2. 构建消息节点
+        nodes = []
+        
+        # 辅助函数：创建节点
+        def add_node(content: str):
+            nodes.append({
+                "type": "node",
+                "data": {
+                    "name": "真寻",
+                    "uin": event.self_id,
+                    "content": content
+                }
+            })
+
+        # 2.1 地图密码
+        pw_msg = delta_service.process_passwords(overview.get("bdData", {}))
+        add_node(pw_msg)
+
+        # 2.2 制作产物
+        profit_msg = delta_service.process_profits(overview.get("spData", {}))
+        add_node(profit_msg)
+
+        # 2.3 战备方案 (拆分为单条太长，这里合并为一个节点发送，或者按原逻辑拆分)
+        # 原逻辑是每档一个节点，这里为了清晰，建议合并。
+        # 如果坚持要分开，可以循环调用 add_node
+        
+        # 这里优化：只生成文本，不直接发，逻辑更清晰
+        # 预处理 CPV 数据
+        market_schemes = {s["targetValue"]: s for s in cpv_data if s.get("schemeType") == "market"}
+        
+        add_node("凑战备方案:")
+        for level in range(5):
+            target_cost = COST_MAPPING[level]
+            scheme = market_schemes.get(target_cost)
+            if scheme:
+                items = "\n".join([i["objectName"] for i in scheme.get("schemeItems", [])])
+                msg = f"{target_cost}:\n{items}\n成本:{scheme['totalHafCost']}"
+                add_node(msg)
+
+        # 2.4 版权声明
+        add_node("数据来源于: KK日报 & 官方\n若有侵权请联系删除")
+
+        # 3. 发送合并转发
+        if isinstance(event, Event): # 简单的类型检查
+            if getattr(event, "group_id", None):
+                await bot.send_group_forward_msg(group_id=event.group_id, messages=nodes)
+            else:
+                await bot.send_private_forward_msg(user_id=event.user_id, messages=nodes)
+
+    except Exception as e:
+        logger.error(f"三角洲插件出错: {traceback.format_exc()}")
+        await MessageUtils.build_message("获取数据失败，请稍后再试...").send()
