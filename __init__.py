@@ -241,6 +241,12 @@ async def handle_delta_command(bot: Bot, event: Event, retry_count: int = 0):
                 0,
                 forward_messages,
             )
+            await generate_forward_message(
+                event,
+                "数据来源于:KK日报&官方\n若有侵权请联系删除",
+                None,
+                forward_messages,
+            )
 
             # 发送转发消息
             try:
