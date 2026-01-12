@@ -4,7 +4,7 @@ from typing import Any
 
 from httpx import AsyncClient, HTTPError
 from nonebot import get_driver
-from nonebot.adapters.onebot.v11 import Bot, Event, Message
+from nonebot.adapters.onebot.v11 import Bot, Event
 from nonebot.plugin import PluginMetadata
 from nonebot_plugin_alconna import Alconna, on_alconna
 
@@ -132,28 +132,6 @@ class DeltaService:
                 "overview": ov_resp.json().get("data", {}),
                 "cpv": cpv_resp.json().get("data", []),
             }
-
-    def process_schemes(self, cpv_data: list[dict]) -> str:
-        """处理战备方案数据"""
-        # 预处理：将 market 类型的方案转为字典 {targetValue: scheme} 以便快速查找
-        market_schemes = {
-            s["targetValue"]: s for s in cpv_data if s.get("schemeType") == "market"
-        }
-
-        lines = ["凑战备方案:"]
-        for level in range(5):
-            target_cost = COST_MAPPING.get(level)
-            scheme = market_schemes.get(target_cost)
-
-            if scheme:
-                items = [item["objectName"] for item in scheme.get("schemeItems", [])]
-                item_str = "\n".join(items)
-                cost = scheme.get("totalHafCost", "未知")
-                lines.append(f"--- {target_cost} 档 ---\n{item_str}\n成本: {cost}")
-            else:
-                lines.append(f"--- {target_cost} 档 ---\n暂无方案")
-
-        return "\n".join(lines)
 
     def process_passwords(self, bd_data: dict) -> str:
         """处理地图密码"""
