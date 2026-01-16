@@ -97,14 +97,23 @@ class DeltaService:
                 "overview": ov_resp.json().get("data", {}),
                 "cpv": cpv_resp.json().get("data", []),
             }
-        except Exception as e:
+        except AttributeError:
+            await self._ensure_cookies(force_refresh=True)
+            # 更新 form_data 的 version
+            form_data["version"] = self.version_cookie
+            return await self.get_game_data(retry)
+        except HTTPError as e:
             # 如果请求失败，尝试刷新 Cookie 后再试一次（简单的重试机制）
             logger.warning(f"{e},数据请求失败，尝试刷新Cookie重试...")
+            await self.client.aclose()
             await self._ensure_cookies(force_refresh=True)
             # 更新 form_data 的 version
             form_data["version"] = self.version_cookie
             retry += 1
             return await self.get_game_data(retry)
+        except Exception as e:
+            logger.error(f"获取数据错误: {e}")
+            return {}
 
     def process_passwords(self, bd_data: dict) -> str:
         """处理地图密码"""
