@@ -40,14 +40,13 @@ DEFAULT_HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
+
 class DeltaService:
     """处理三角洲数据的服务类"""
 
     def __init__(self):
         self.client: AsyncClient | None = None
         self.version_cookie: str = ""
-        # 共享 Session，复用连接
-        self.client = AsyncClient(headers=DEFAULT_HEADERS, timeout=10.0)
 
     async def _ensure_cookies(self, force_refresh: bool = False):
         """确保 Cookie 有效，必要时刷新"""
@@ -60,6 +59,7 @@ class DeltaService:
 
         logger.info("正在获取/刷新三角洲 Cookie...")
         try:
+            self.client = AsyncClient(headers=DEFAULT_HEADERS, timeout=10.0)
             # 1. 访问主页获取 PHPSESSID
             await self.client.get(URLS["HOME"])
 
@@ -76,41 +76,35 @@ class DeltaService:
             logger.error(f"获取Cookie失败: {e}")
             raise
 
-    async def get_game_data(self) -> dict[str, Any]:
+    async def get_game_data(self, retry: int = 0) -> dict[str, Any]:
         """并发获取所有游戏数据"""
-        await self._ensure_cookies()
-
+        if retry > 3:
+            logger.error("获取数据错误")
+            return {}
         form_data = {"version": self.version_cookie, "globalData": "false"}
-
+        logger.debug(f"form_data={form_data}")
         try:
             # 并发请求 API，提高速度
+            logger.debug(f"cookies={self.client.cookies}")
             ov_task = self.client.post(URLS["OVERVIEW"], data=form_data)
             cpv_task = self.client.post(URLS["CPV"], data=form_data)
 
             ov_resp, cpv_resp = await asyncio.gather(ov_task, cpv_task)
-
             # 检查响应状态 (如果 Session 过期可能返回特定错误，这里简单处理)
-            if ov_resp.status_code != 200 or cpv_resp.status_code != 200:
-                raise HTTPError("API请求返回非200状态")
-
+            if ov_resp.json().get("msg") == "系统繁忙，请稍后再试":
+                raise HTTPError("API请求错误")
             return {
                 "overview": ov_resp.json().get("data", {}),
                 "cpv": cpv_resp.json().get("data", []),
             }
-        except Exception:
+        except Exception as e:
             # 如果请求失败，尝试刷新 Cookie 后再试一次（简单的重试机制）
-            logger.warning("数据请求失败，尝试刷新Cookie重试...")
+            logger.warning(f"{e},数据请求失败，尝试刷新Cookie重试...")
             await self._ensure_cookies(force_refresh=True)
             # 更新 form_data 的 version
             form_data["version"] = self.version_cookie
-
-            ov_resp = await self.client.post(URLS["OVERVIEW"], data=form_data)
-            cpv_resp = await self.client.post(URLS["CPV"], data=form_data)
-
-            return {
-                "overview": ov_resp.json().get("data", {}),
-                "cpv": cpv_resp.json().get("data", []),
-            }
+            retry += 1
+            return await self.get_game_data(retry)
 
     def process_passwords(self, bd_data: dict) -> str:
         """处理地图密码"""

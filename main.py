@@ -5,18 +5,22 @@ from nonebot_plugin_alconna import Alconna, on_alconna
 
 from zhenxun.services.log import logger
 from zhenxun.utils.message import MessageUtils
-from .data_source import DeltaService, COST_MAPPING
+
+from .data_source import COST_MAPPING, DeltaService
 
 # 实例化服务
 delta_service = DeltaService()
 command_matcher = on_alconna(Alconna("re:(洲|粥)"), priority=1, block=True)
+
 
 @command_matcher.handle()
 async def handle_delta_command(bot: Bot, event: Event):
     try:
         # 1. 获取数据
         data = await delta_service.get_game_data()
-
+        if not data:
+            await MessageUtils.build_message("获取数据失败，请稍后再试...").send()
+            return
         overview = data["overview"]
         cpv_data = data["cpv"]
 
