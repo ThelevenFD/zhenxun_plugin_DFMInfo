@@ -11,5 +11,5 @@ __plugin_meta__ = PluginMetadata(
     name="三角洲小助手",
     description=f"{BotConfig.self_nickname}帮你获取三角洲信息！",
     usage="指令：洲 / 粥",
-    extra=PluginExtraData(author="The_elevenFD", version="0.2").to_dict(),
+    extra=PluginExtraData(author="The_elevenFD", version="0.3").to_dict(),
 )
