@@ -41,7 +41,7 @@ class DeltaService:
     """处理三角洲数据的服务类"""
 
     def __init__(self):
-        self.retry_count = 0
+        pass
 
     async def get_game_data(self, retry: int = 0) -> dict[str, Any]:
         """并发获取所有游戏数据"""
@@ -67,7 +67,7 @@ class DeltaService:
                     "cpv": cpv_resp.json().get("data", []),
                 }
 
-        except (ValueError, Exception) as e:
+        except Exception as e:
             logger.warning(f"请求失败({e})，尝试刷新重试...({retry + 1}/3)")
             return await self.get_game_data(retry + 1)
 
