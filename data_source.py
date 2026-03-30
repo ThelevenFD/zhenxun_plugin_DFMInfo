@@ -61,10 +61,13 @@ class DeltaService:
 
                 # 解析响应
                 ov_json = ov_resp.json()
+                cpv_json = cpv_resp.json()
 
+                # 注意：API直接返回数据，没有外层的"data"字段
+                # OVERVIEW返回字典，CPV返回列表
                 return {
-                    "overview": ov_json.get("data", {}),
-                    "cpv": cpv_resp.json().get("data", []),
+                    "overview": ov_json if isinstance(ov_json, dict) else {},
+                    "cpv": cpv_json if isinstance(cpv_json, list) else [],
                 }
 
         except Exception as e:
