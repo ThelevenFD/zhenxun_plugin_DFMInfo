@@ -59,15 +59,75 @@ class DeltaService:
 
                 ov_resp, cpv_resp = await asyncio.gather(ov_task, cpv_task)
 
-                # 解析响应
-                ov_json = ov_resp.json()
-                cpv_json = cpv_resp.json()
+                # 记录原始响应状态
+                logger.info(f"API响应状态 - OVERVIEW: {ov_resp.status_code}, CPV: {cpv_resp.status_code}")
 
-                # 注意：API直接返回数据，没有外层的"data"字段
-                # OVERVIEW返回字典，CPV返回列表
+                # 解析 OVERVIEW 响应
+                ov_data = {}
+                if ov_resp.status_code == 200:
+                    try:
+                        ov_json = ov_resp.json()
+                        
+                        # 校验响应结构，避免静默吞掉上游契约变更
+                        if not isinstance(ov_json, dict):
+                            logger.warning(
+                                f"意外的OVERVIEW响应结构: 期望dict, 实际得到 {type(ov_json).__name__}, 内容: {str(ov_json)[:200]}"
+                            )
+                        else:
+                            # 新的数据结构: {"code": 1, "msg": "获取成功", "data": {...}}
+                            if "data" in ov_json:
+                                data = ov_json["data"]
+                                if isinstance(data, dict):
+                                    ov_data = data
+                                    logger.info("OVERVIEW: 使用新的数据结构 (code/msg/data)")
+                                else:
+                                    logger.warning(f"OVERVIEW data字段不是dict: {type(data).__name__}")
+                            else:
+                                # 兼容旧结构: 直接返回数据
+                                ov_data = ov_json
+                                logger.info("OVERVIEW: 使用旧的数据结构 (直接返回数据)")
+                    except Exception as e:
+                        logger.warning(f"OVERVIEW JSON解析失败: {e}, 响应文本: {ov_resp.text[:200]}")
+                else:
+                    logger.warning(f"OVERVIEW API 返回错误状态码: {ov_resp.status_code}, 响应: {ov_resp.text[:200]}")
+                
+                # 解析 CPV 响应
+                cpv_data = []
+                if cpv_resp.status_code == 200:
+                    try:
+                        cpv_json = cpv_resp.json()
+                        
+                        # 校验响应结构，避免静默吞掉上游契约变更
+                        if not isinstance(cpv_json, (dict, list)):
+                            logger.warning(
+                                f"意外的CPV响应结构: 期望dict或list, 实际得到 {type(cpv_json).__name__}, 内容: {str(cpv_json)[:200]}"
+                            )
+                        elif isinstance(cpv_json, dict):
+                            # 新的数据结构: {"code": 1, "msg": "获取成功", "data": [...]}
+                            if "data" in cpv_json:
+                                data = cpv_json["data"]
+                                if isinstance(data, list):
+                                    cpv_data = data
+                                    logger.info("CPV: 使用新的数据结构 (code/msg/data)")
+                                else:
+                                    logger.warning(f"CPV data字段不是list: {type(data).__name__}")
+                            else:
+                                logger.warning(f"CPV响应是dict但没有data字段: {list(cpv_json.keys())}")
+                        elif isinstance(cpv_json, list):
+                            # 兼容旧结构: 直接返回列表
+                            cpv_data = cpv_json
+                            logger.info("CPV: 使用旧的数据结构 (直接返回列表)")
+                    except Exception as e:
+                        logger.warning(f"CPV JSON解析失败: {e}, 响应文本: {cpv_resp.text[:200]}")
+                else:
+                    logger.warning(f"CPV API 返回错误状态码: {cpv_resp.status_code}, 响应: {cpv_resp.text[:200]}")
+
+                # 记录最终获取的数据状态
+                logger.info(f"数据获取结果 - overview keys: {list(ov_data.keys())}, cpv长度: {len(cpv_data)}")
+
                 return {
-                    "overview": ov_json if isinstance(ov_json, dict) else {},
-                    "cpv": cpv_json if isinstance(cpv_json, list) else [],
+                    "overview": ov_data if isinstance(ov_data, dict) else {},
+                    "cpv": cpv_data if isinstance(cpv_data, list) else [],
                 }
 
         except Exception as e:
