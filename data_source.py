@@ -1,17 +1,20 @@
 import asyncio
 from typing import Any
 
-from httpx import AsyncClient, HTTPError
+# 确保安装了 curl_cffi: pip install curl_cffi
+from httpx import AsyncClient
 
 from zhenxun.services.log import logger
 
-API_BASE = "https://www.kkrb.net"
+API_BASE = "https://dfapi.eleven.icu"
 URLS = {
-    "MENU": f"{API_BASE}/getMenu",
     "OVERVIEW": f"{API_BASE}/getOVData",
-    "HOME": f"{API_BASE}/?viewpage=view%2Foverview",
     "CPV": f"{API_BASE}/getCPVData",
 }
+
+# -------------------------------------------------------
+# 补回缺失的字典定义
+# -------------------------------------------------------
 
 # 战备值映射 (等级 -> 目标金额)
 COST_MAPPING = {0: 112500, 1: 187500, 2: 550000, 3: 600000, 4: 780000}
@@ -33,87 +36,40 @@ WORKSHOP_NAMES = {
     "armory": "防具台",
 }
 
-# 请求头
-DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": URLS["HOME"],
-    "X-Requested-With": "XMLHttpRequest",
-}
-
 
 class DeltaService:
     """处理三角洲数据的服务类"""
 
     def __init__(self):
-        self.client: AsyncClient | None = None
-        self.version_cookie: str = ""
-
-    async def _ensure_cookies(self, force_refresh: bool = False):
-        """确保 Cookie 有效，必要时刷新"""
-        if (
-            not force_refresh
-            and self.version_cookie
-            and self.client.cookies.get("PHPSESSID")
-        ):
-            return
-
-        logger.info("正在获取/刷新三角洲 Cookie...")
-        try:
-            self.client = AsyncClient(headers=DEFAULT_HEADERS, timeout=10.0)
-            # 1. 访问主页获取 PHPSESSID
-            await self.client.get(URLS["HOME"])
-
-            # 2. 获取版本号
-            resp = await self.client.post(URLS["MENU"])
-            data = resp.json()
-            self.version_cookie = data.get("built_ver", "")
-
-            if not self.version_cookie:
-                raise ValueError("未获取到版本号")
-
-            logger.info(f"Cookie刷新成功: Ver={self.version_cookie}")
-        except Exception as e:
-            logger.error(f"获取Cookie失败: {e}")
-            raise
+        pass
 
     async def get_game_data(self, retry: int = 0) -> dict[str, Any]:
         """并发获取所有游戏数据"""
         if retry > 3:
-            logger.error("获取数据错误")
+            logger.error("获取数据错误: 重试次数超限")
             return {}
-        form_data = {"version": self.version_cookie, "globalData": "false"}
-        logger.debug(f"form_data={form_data}")
-        try:
-            # 并发请求 API，提高速度
-            logger.debug(f"cookies={self.client.cookies}")
-            ov_task = self.client.post(URLS["OVERVIEW"], data=form_data)
-            cpv_task = self.client.post(URLS["CPV"], data=form_data)
 
-            ov_resp, cpv_resp = await asyncio.gather(ov_task, cpv_task)
-            # 检查响应状态 (如果 Session 过期可能返回特定错误，这里简单处理)
-            if ov_resp.json().get("msg") == "系统繁忙，请稍后再试":
-                raise HTTPError("API请求错误")
-            return {
-                "overview": ov_resp.json().get("data", {}),
-                "cpv": cpv_resp.json().get("data", []),
-            }
-        except AttributeError:
-            await self._ensure_cookies(force_refresh=True)
-            # 更新 form_data 的 version
-            form_data["version"] = self.version_cookie
-            return await self.get_game_data(retry)
-        except HTTPError as e:
-            # 如果请求失败，尝试刷新 Cookie 后再试一次（简单的重试机制）
-            logger.warning(f"{e},数据请求失败，尝试刷新Cookie重试...")
-            await self.client.aclose()
-            await self._ensure_cookies(force_refresh=True)
-            # 更新 form_data 的 version
-            form_data["version"] = self.version_cookie
-            retry += 1
-            return await self.get_game_data(retry)
+        try:
+            async with AsyncClient(
+                timeout=15.0,
+            ) as session:
+                # 并发请求
+                ov_task = session.get(URLS["OVERVIEW"])
+                cpv_task = session.get(URLS["CPV"])
+
+                ov_resp, cpv_resp = await asyncio.gather(ov_task, cpv_task)
+
+                # 解析响应
+                ov_json = ov_resp.json()
+
+                return {
+                    "overview": ov_json.get("data", {}),
+                    "cpv": cpv_resp.json().get("data", []),
+                }
+
         except Exception as e:
-            logger.error(f"获取数据错误: {e}")
-            return {}
+            logger.warning(f"请求失败({e})，尝试刷新重试...({retry + 1}/3)")
+            return await self.get_game_data(retry + 1)
 
     def process_passwords(self, bd_data: dict) -> str:
         """处理地图密码"""
