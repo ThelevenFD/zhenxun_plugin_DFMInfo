@@ -7,7 +7,7 @@ from zhenxun.services.log import logger
 
 API_BASE = "https://dfapi.eleven.icu"
 URLS = {
-    "STATUS": f"{API_BASE}/Status",
+    "STATUS": f"{API_BASE}/status",
     "OVERVIEW": f"{API_BASE}/getOVData",
     "CPV": f"{API_BASE}/getCPVData",
 }
@@ -61,7 +61,7 @@ class DeltaService:
                 status_task = session.get(URLS["STATUS"])
 
                 ov_resp, cpv_resp, status_resp = await asyncio.gather(
-                    ov_task, cpv_task, status_task
+                    ov_task, cpv_task, status_task, return_exceptions=True
                 )
 
                 # 解析响应
