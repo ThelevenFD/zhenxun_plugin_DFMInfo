@@ -1,13 +1,13 @@
 import asyncio
 from typing import Any
 
-# 确保安装了 curl_cffi: pip install curl_cffi
 from httpx import AsyncClient
 
 from zhenxun.services.log import logger
 
 API_BASE = "https://dfapi.eleven.icu"
 URLS = {
+    "STATUS": f"{API_BASE}/status",
     "OVERVIEW": f"{API_BASE}/getOVData",
     "CPV": f"{API_BASE}/getCPVData",
 }
@@ -41,7 +41,9 @@ class DeltaService:
     """处理三角洲数据的服务类"""
 
     def __init__(self):
-        pass
+        self.ov_json: dict[str, Any] = {}
+        self.cpv_json: dict[str, Any] = {}
+        self.status_json: dict[str, Any] = {}
 
     async def get_game_data(self, retry: int = 0) -> dict[str, Any]:
         """并发获取所有游戏数据"""
@@ -56,15 +58,21 @@ class DeltaService:
                 # 并发请求
                 ov_task = session.get(URLS["OVERVIEW"])
                 cpv_task = session.get(URLS["CPV"])
+                status_task = session.get(URLS["STATUS"])
 
-                ov_resp, cpv_resp = await asyncio.gather(ov_task, cpv_task)
+                ov_resp, cpv_resp, status_resp = await asyncio.gather(
+                    ov_task, cpv_task, status_task, return_exceptions=True
+                )
 
                 # 解析响应
-                ov_json = ov_resp.json()
+                self.ov_json = ov_resp.json()
+                self.cpv_json = cpv_resp.json()
+                self.status_json = status_resp.json()
 
                 return {
-                    "overview": ov_json.get("data", {}),
-                    "cpv": cpv_resp.json().get("data", []),
+                    "overview": self.ov_json.get("data", {}),
+                    "cpv": self.cpv_json.get("data", {}),
+                    "status": self.status_json,
                 }
 
         except Exception as e:
