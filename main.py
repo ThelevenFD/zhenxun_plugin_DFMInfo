@@ -1,3 +1,4 @@
+import time
 import traceback
 
 from nonebot.adapters.onebot.v11 import Bot, Event
@@ -21,8 +22,10 @@ async def handle_delta_command(bot: Bot, event: Event):
         if not data:
             await MessageUtils.build_message("获取数据失败，请稍后再试...").send()
             return
+
         overview = data["overview"]
         cpv_data = data["cpv"]
+        status_data = data["status"]
 
         nodes = []
 
@@ -54,6 +57,14 @@ async def handle_delta_command(bot: Bot, event: Event):
                 )
                 msg = f"{target_cost}:\n{items}\n成本:{scheme['totalHafCost']}"
                 add_node(msg)
+
+        update_time = status_data.get("last_update", None)
+        update_time_str = (
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(update_time))
+            if update_time
+            else "未知"
+        )
+        add_node(f"数据更新时间: {update_time_str}")
 
         add_node("数据来源于: KK日报 & 官方\n若有侵权请联系删除")
 
