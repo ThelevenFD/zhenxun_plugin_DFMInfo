@@ -49,9 +49,8 @@ class DeltaService:
 
     async def get_game_data(self, retry: int = 0) -> dict[str, Any]:
         """并发获取所有游戏数据"""
-        if retry:
-            self.index = 1
-        if retry > 3:
+        self.index = retry % len(self.API_BASE)
+        if retry >= 3:
             logger.error("获取数据错误: 重试次数超限")
             return {}
 
@@ -72,10 +71,12 @@ class DeltaService:
                 try:
                     self.ov_json = ov_resp.json()
                 except Exception:
+                    logger.warning("解析ovdata失败")
                     pass
                 try:
                     self.cpv_json = cpv_resp.json()
                 except Exception:
+                    logger.warning("解析cpvdata失败")
                     pass
                 try:
                     self.status_json = status_resp.json()
