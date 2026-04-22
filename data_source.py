@@ -5,17 +5,6 @@ from httpx import AsyncClient
 
 from zhenxun.services.log import logger
 
-API_BASE = "https://dfapi.eleven.icu"
-URLS = {
-    "STATUS": f"{API_BASE}/status",
-    "OVERVIEW": f"{API_BASE}/getOVData",
-    "CPV": f"{API_BASE}/getCPVData",
-}
-
-# -------------------------------------------------------
-# 补回缺失的字典定义
-# -------------------------------------------------------
-
 # 战备值映射 (等级 -> 目标金额)
 COST_MAPPING = {0: 112500, 1: 187500, 2: 550000, 3: 600000, 4: 780000}
 
@@ -44,10 +33,19 @@ class DeltaService:
         self.ov_json: dict[str, Any] = {}
         self.cpv_json: dict[str, Any] = {}
         self.status_json: dict[str, Any] = {}
+        self.API_BASE = ["https://dfapi1.eleven.icu", "https://dfapi.eleven.icu"]
+
+    def _get_urls(self, retry) -> dict[str, str]:
+        index = retry % len(self.API_BASE)
+        return {
+            "STATUS": f"{self.API_BASE[index]}/status",
+            "OVERVIEW": f"{self.API_BASE[index]}/getOVData",
+            "CPV": f"{self.API_BASE[index]}/getCPVData",
+        }
 
     async def get_game_data(self, retry: int = 0) -> dict[str, Any]:
         """并发获取所有游戏数据"""
-        if retry > 3:
+        if retry >= 3:
             logger.error("获取数据错误: 重试次数超限")
             return {}
 
@@ -56,23 +54,34 @@ class DeltaService:
                 timeout=15.0,
             ) as session:
                 # 并发请求
-                ov_task = session.get(URLS["OVERVIEW"])
-                cpv_task = session.get(URLS["CPV"])
-                status_task = session.get(URLS["STATUS"])
+                ov_task = session.get(self._get_urls(retry)["OVERVIEW"])
+                cpv_task = session.get(self._get_urls(retry)["CPV"])
+                status_task = session.get(self._get_urls(retry)["STATUS"])
 
                 ov_resp, cpv_resp, status_resp = await asyncio.gather(
                     ov_task, cpv_task, status_task, return_exceptions=True
                 )
 
                 # 解析响应
-                self.ov_json = ov_resp.json()
-                self.cpv_json = cpv_resp.json()
-                self.status_json = status_resp.json()
+                try:
+                    self.ov_json = ov_resp.json()
+                except Exception:
+                    logger.warning("解析ovdata失败")
+                    pass
+                try:
+                    self.cpv_json = cpv_resp.json()
+                except Exception:
+                    logger.warning("解析cpvdata失败")
+                    pass
+                try:
+                    self.status_json = status_resp.json()
+                except Exception:
+                    pass
 
                 return {
                     "overview": self.ov_json.get("data", {}),
                     "cpv": self.cpv_json.get("data", {}),
-                    "status": self.status_json,
+                    "status": self.status_json if self.status_json else {},
                 }
 
         except Exception as e:
